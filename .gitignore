@@ -1,0 +1,25 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Env
+.env*
+!.env.example
+
+# app (Next.js) — see app/.gitignore for app-specific rules
+app/node_modules/
+app/.next/
+
+# esp32 (PlatformIO / ESP-IDF / Arduino)
+esp32/.pio/
+esp32/build/
+esp32/managed_components/
+esp32/sdkconfig.old
+esp32/*.bin
+esp32/*.elf
+esp32/*.map
