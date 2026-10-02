@@ -4,11 +4,8 @@
 
 import type { DataConnection, Peer } from "peerjs";
 import { useEffect, useRef, useState } from "react";
-import { PEER_PREFIX, type OrientationPacket } from "@/app/demo/protocol";
-import { FadeIn } from "@/components/motion/fade-in";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { PEER_PREFIX, type OrientationPacket } from "./protocol";
+import { DemoButton, Panel, Pill } from "./ui";
 
 type Status = "idle" | "connecting" | "streaming" | "error";
 
@@ -104,43 +101,37 @@ export function SensorView({ code }: { code: string }) {
   }
 
   return (
-    <FadeIn className="mx-auto flex max-w-sm flex-col gap-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            Phone sensor
-            <Badge variant={status === "streaming" ? "default" : "outline"}>{status}</Badge>
-          </CardTitle>
-          <CardDescription>
-            Sending to display <span className="font-mono">{code}</span>. Hold the phone upright against
-            your chest, screen facing out, like the real sensor.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-2 text-sm">
-          {angles ? (
-            <div className="grid grid-cols-3 gap-2 text-center tabular-nums">
-              <Angle label="alpha" value={angles.a} />
-              <Angle label="beta" value={angles.b} />
-              <Angle label="gamma" value={angles.g} />
-            </div>
-          ) : (
-            <p className="text-muted-foreground">Tap start, then allow motion access.</p>
-          )}
-          {error && <p className="text-destructive">{error}</p>}
-        </CardContent>
-        <CardFooter>
-          {status === "idle" || status === "error" ? (
-            <Button className="w-full" size="lg" onClick={start}>
-              Start sensor
-            </Button>
-          ) : (
-            <Button className="w-full" size="lg" variant="outline" onClick={stop}>
-              Stop
-            </Button>
-          )}
-        </CardFooter>
-      </Card>
-    </FadeIn>
+    <div className="mx-auto flex max-w-sm flex-col gap-4">
+      <Panel className="flex flex-col gap-4">
+        <div className="flex items-center gap-2">
+          <h1 className="font-semibold">Controller</h1>
+          <Pill on={status === "streaming"}>{status}</Pill>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Linked to <span className="font-mono">{code}</span>. Hold the phone up with the screen facing
+          you. Tilt left/right to steer, tip forward to speed up.
+        </p>
+        {angles ? (
+          <div className="grid grid-cols-3 gap-2 text-center text-sm tabular-nums">
+            <Angle label="alpha" value={angles.a} />
+            <Angle label="beta" value={angles.b} />
+            <Angle label="gamma" value={angles.g} />
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">Tap start, then allow motion access.</p>
+        )}
+        {error && <p className="text-sm text-destructive">{error}</p>}
+        {status === "idle" || status === "error" ? (
+          <DemoButton className="h-12 w-full text-base" onClick={start}>
+            Start
+          </DemoButton>
+        ) : (
+          <DemoButton className="h-12 w-full text-base" variant="outline" onClick={stop}>
+            Stop
+          </DemoButton>
+        )}
+      </Panel>
+    </div>
   );
 }
 

@@ -1,170 +1,157 @@
 "use client";
 
-// Laptop side: waits for a phone to connect, renders its orientation in 3D
-// and turns it into a posture score.
+// Laptop side of /demo: pairs with a phone, then shows either the
+// Tilt Racer game or the posture sphere.
 
-import type { Peer } from "peerjs";
+import { motion } from "motion/react";
 import { QRCodeSVG } from "qrcode.react";
-import { useEffect, useRef, useState } from "react";
-import { Euler, MathUtils, Quaternion } from "three";
-import { OrientationScene } from "@/app/demo/orientation-scene";
-import { makeCode, PEER_PREFIX, type OrientationPacket } from "@/app/demo/protocol";
-import { FadeIn } from "@/components/motion/fade-in";
-import { ScoreRing } from "@/components/posture/score-ring";
-import { StatusBadge } from "@/components/posture/status-badge";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { scoreFromAngles, statusFromScore } from "@/lib/posture";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { leanAngles, scoreFromAngles, TONE_COLORS, toneFromScore } from "./math";
+import { OrientationScene } from "./orientation-scene";
+import { RaceGame, type Controls } from "./race-game";
+import { DemoButton, Panel, Pill, cx } from "./ui";
+import { usePhoneLink } from "./use-phone-link";
 
-type Status = "starting" | "waiting" | "connected" | "error";
+type Mode = "race" | "posture";
 
-// DeviceOrientation angles → quaternion in the phone's own frame
-// (x = right, y = top of phone, z = out of the screen). W3C order is Z-X'-Y''.
-function packetToQuaternion(p: OrientationPacket) {
-  const euler = new Euler(
-    MathUtils.degToRad(p.b),
-    MathUtils.degToRad(p.g),
-    MathUtils.degToRad(p.a),
-    "ZXY"
-  );
-  return new Quaternion().setFromEuler(euler);
-}
+const FULL_TILT_DEG = 25;
+const clamp1 = (v: number) => Math.max(-1, Math.min(1, v));
+const deadzone = (v: number) => (Math.abs(v) < 0.06 ? 0 : v);
 
 export function DisplayView() {
-  const [status, setStatus] = useState<Status>("starting");
-  const [code, setCode] = useState<string | null>(null);
-  const [joinUrl, setJoinUrl] = useState<string | null>(null);
-  const [reading, setReading] = useState({ pitch: 0, roll: 0, score: 100 });
+  const link = usePhoneLink();
+  const { relative, hasData, calibrate } = link;
+  const [mode, setMode] = useState<Mode>("race");
+  const [invert, setInvert] = useState(false);
+  const connected = link.status === "connected";
 
-  // Hot path lives in refs: updated ~30x/sec without re-rendering.
-  const latest = useRef<Quaternion | null>(null);
-  const baseline = useRef<Quaternion | null>(null);
-  const relative = useRef(new Quaternion());
-
+  // Keyboard fallback (arrow keys / WASD).
+  const keys = useRef(new Set<string>());
   useEffect(() => {
-    let peer: Peer | null = null;
-    let cancelled = false;
-
-    async function connect(attempt = 0) {
-      const { default: PeerCtor } = await import("peerjs");
-      if (cancelled) return;
-      const newCode = makeCode();
-      peer = new PeerCtor(PEER_PREFIX + newCode);
-
-      peer.on("open", () => {
-        setCode(newCode);
-        setJoinUrl(`${window.location.origin}/demo?join=${newCode}`);
-        setStatus("waiting");
-      });
-
-      peer.on("connection", (conn) => {
-        conn.on("open", () => {
-          baseline.current = null; // recalibrate on every new phone
-          setStatus("connected");
-        });
-        conn.on("data", (data) => {
-          const q = packetToQuaternion(data as OrientationPacket);
-          latest.current = q;
-          baseline.current ??= q.clone();
-          // Rotation relative to the calibrated "upright" pose.
-          relative.current.copy(baseline.current).invert().multiply(q);
-        });
-        conn.on("close", () => setStatus("waiting"));
-      });
-
-      peer.on("error", (err) => {
-        if (err.type === "unavailable-id" && attempt < 3) {
-          peer?.destroy();
-          connect(attempt + 1);
-          return;
-        }
-        setStatus("error");
-      });
-    }
-
-    connect();
-
-    // Update the numbers 10x/sec (the 3D scene reads the ref every frame).
-    const interval = setInterval(() => {
-      if (!latest.current) return;
-      // YXZ: y = twist (ignored), x = lean forward/back, z = lean sideways.
-      const e = new Euler().setFromQuaternion(relative.current, "YXZ");
-      const pitch = Math.round(MathUtils.radToDeg(e.x));
-      const roll = Math.round(MathUtils.radToDeg(e.z));
-      setReading({ pitch, roll, score: scoreFromAngles(pitch, roll) });
-    }, 100);
-
+    const down = (e: KeyboardEvent) => keys.current.add(e.code);
+    const up = (e: KeyboardEvent) => keys.current.delete(e.code);
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
     return () => {
-      cancelled = true;
-      clearInterval(interval);
-      peer?.destroy();
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
     };
   }, []);
 
-  function calibrate() {
-    if (latest.current) baseline.current = latest.current.clone();
-  }
-
-  const postureStatus = statusFromScore(reading.score);
+  const getControls = useCallback((): Controls => {
+    if (hasData()) {
+      const { pitch, roll } = leanAngles(relative.current);
+      // roll + = top of phone tilted left; pitch + = top tilted toward you.
+      const steer = deadzone(clamp1(-roll / FULL_TILT_DEG)) * (invert ? -1 : 1);
+      const throttle = deadzone(clamp1(-pitch / FULL_TILT_DEG));
+      return { steer, throttle };
+    }
+    const k = keys.current;
+    const pressed = (...codes: string[]) => codes.some((c) => k.has(c));
+    return {
+      steer: (pressed("ArrowRight", "KeyD") ? 1 : 0) - (pressed("ArrowLeft", "KeyA") ? 1 : 0),
+      throttle: (pressed("ArrowUp", "KeyW") ? 1 : 0) - (pressed("ArrowDown", "KeyS") ? 1 : 0),
+    };
+  }, [hasData, relative, invert]);
 
   return (
-    <div className="flex flex-col gap-6">
-      <FadeIn>
-        <h1 className="text-2xl font-semibold tracking-tight">Live demo</h1>
-        <p className="text-sm text-muted-foreground">
-          Your phone stands in for the ESP32 sensor. Data goes phone → laptop directly (WebRTC).
-        </p>
-      </FadeIn>
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="text-2xl font-semibold tracking-tight">Lab</h1>
+        <div className="flex rounded-lg border p-0.5">
+          {(["race", "posture"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setMode(m)}
+              className={cx(
+                "relative rounded-md px-3 py-1 text-sm capitalize",
+                mode === m ? "text-foreground" : "text-muted-foreground"
+              )}
+            >
+              {mode === m && (
+                <motion.span layoutId="demo-mode" className="absolute inset-0 -z-10 rounded-md bg-muted" />
+              )}
+              {m}
+            </button>
+          ))}
+        </div>
+        <Pill on={connected}>{connected ? "phone connected" : link.status}</Pill>
+      </div>
 
-      <div className="grid gap-4 md:grid-cols-[1fr_280px]">
-        <Card className="overflow-hidden">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              Sensor orientation
-              <Badge variant={status === "connected" ? "default" : "outline"}>{status}</Badge>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="h-[420px]">
-            <OrientationScene target={relative} status={postureStatus} />
-          </CardContent>
-        </Card>
+      <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
+        <div className="h-[520px]">
+          {mode === "race" ? (
+            <RaceGame
+              getControls={getControls}
+              inputLabel={connected ? "Phone" : "Keyboard"}
+              onStart={calibrate}
+            />
+          ) : (
+            <div className="h-full rounded-xl border bg-card">
+              <OrientationSphere link={link} />
+            </div>
+          )}
+        </div>
 
         <div className="flex flex-col gap-4">
-          {status === "connected" ? (
-            <Card>
-              <CardContent className="flex flex-col items-center gap-3">
-                <ScoreRing score={reading.score} />
-                <StatusBadge status={postureStatus} />
-                <p className="text-xs text-muted-foreground tabular-nums">
-                  pitch {reading.pitch}° · roll {reading.roll}°
-                </p>
-                <Button variant="outline" className="w-full" onClick={calibrate}>
-                  Calibrate (sit straight, then tap)
-                </Button>
-              </CardContent>
-            </Card>
+          {connected ? (
+            <Panel className="flex flex-col gap-2">
+              <DemoButton variant="outline" onClick={calibrate}>
+                Calibrate (hold still, tap)
+              </DemoButton>
+              {mode === "race" && (
+                <DemoButton variant="outline" onClick={() => setInvert((v) => !v)}>
+                  Steering: {invert ? "inverted" : "normal"}
+                </DemoButton>
+              )}
+            </Panel>
           ) : (
-            <Card>
-              <CardHeader>
-                <CardTitle>Connect your phone</CardTitle>
-                <CardDescription>Scan with the phone camera, or open /demo?join=CODE on it.</CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col items-center gap-3">
-                {joinUrl ? (
-                  <div className="rounded-lg bg-white p-3">
-                    <QRCodeSVG value={joinUrl} size={180} />
-                  </div>
-                ) : (
-                  <div className="size-[204px] animate-pulse rounded-lg bg-muted" />
-                )}
-                <p className="font-mono text-2xl tracking-widest">{code ?? "······"}</p>
-                {status === "error" && (
-                  <p className="text-sm text-destructive">Couldn&apos;t reach the pairing server. Reload to retry.</p>
-                )}
-              </CardContent>
-            </Card>
+            <Panel className="flex flex-col items-center gap-3 text-center">
+              <p className="text-sm font-medium">Use your phone as the controller</p>
+              {link.joinUrl ? (
+                <div className="rounded-lg bg-white p-3">
+                  <QRCodeSVG value={link.joinUrl} size={168} />
+                </div>
+              ) : (
+                <div className="size-[192px] animate-pulse rounded-lg bg-muted" />
+              )}
+              <p className="font-mono text-2xl tracking-widest">{link.code ?? "······"}</p>
+              <p className="text-xs text-muted-foreground">Scan, or open /demo?join=CODE on the phone.</p>
+              {link.status === "error" && (
+                <p className="text-sm text-destructive">Couldn&apos;t reach the pairing server. Reload to retry.</p>
+              )}
+            </Panel>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OrientationSphere({ link }: { link: ReturnType<typeof usePhoneLink> }) {
+  const { relative, hasData } = link;
+  const [reading, setReading] = useState({ pitch: 0, roll: 0, score: 100 });
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (!hasData()) return;
+      const { pitch, roll } = leanAngles(relative.current);
+      setReading({ pitch: Math.round(pitch), roll: Math.round(roll), score: scoreFromAngles(pitch, roll) });
+    }, 100);
+    return () => clearInterval(id);
+  }, [hasData, relative]);
+
+  const tone = toneFromScore(reading.score);
+
+  return (
+    <div className="relative h-full">
+      <OrientationScene target={relative} tone={tone} />
+      <div className="pointer-events-none absolute left-4 top-4 font-mono">
+        <div className="text-4xl font-bold tabular-nums" style={{ color: TONE_COLORS[tone] }}>
+          {reading.score}
+        </div>
+        <div className="text-xs text-muted-foreground tabular-nums">
+          pitch {reading.pitch}° · roll {reading.roll}°
         </div>
       </div>
     </div>

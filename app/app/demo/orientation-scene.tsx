@@ -6,16 +6,10 @@
 
 import { Canvas, useFrame } from "@react-three/fiber";
 import { useRef, type RefObject } from "react";
-import { Quaternion, type Group } from "three";
-import type { PostureStatus } from "@/lib/types";
+import type { Group, Quaternion } from "three";
+import { TONE_COLORS, type Tone } from "./math";
 
-const STATUS_COLORS: Record<PostureStatus, string> = {
-  good: "#22c55e",
-  warning: "#f59e0b",
-  bad: "#ef4444",
-};
-
-function Body({ target, status }: { target: RefObject<Quaternion>; status: PostureStatus }) {
+function Body({ target, tone }: { target: RefObject<Quaternion>; tone: Tone }) {
   const group = useRef<Group>(null);
 
   useFrame((_, delta) => {
@@ -24,7 +18,7 @@ function Body({ target, status }: { target: RefObject<Quaternion>; status: Postu
     group.current.quaternion.slerp(target.current, 1 - Math.exp(-delta * 12));
   });
 
-  const color = STATUS_COLORS[status];
+  const color = TONE_COLORS[tone];
 
   return (
     <group ref={group}>
@@ -51,18 +45,12 @@ function Body({ target, status }: { target: RefObject<Quaternion>; status: Postu
   );
 }
 
-export function OrientationScene({
-  target,
-  status,
-}: {
-  target: RefObject<Quaternion>;
-  status: PostureStatus;
-}) {
+export function OrientationScene({ target, tone }: { target: RefObject<Quaternion>; tone: Tone }) {
   return (
     <Canvas camera={{ position: [0, 0.6, 5], fov: 45 }} dpr={[1, 2]}>
       <ambientLight intensity={0.7} />
       <directionalLight position={[3, 5, 4]} intensity={1.2} />
-      <Body target={target} status={status} />
+      <Body target={target} tone={tone} />
     </Canvas>
   );
 }

@@ -9,7 +9,6 @@ const LINKS = [
   { href: "/", label: "Dashboard" },
   { href: "/history", label: "History" },
   { href: "/device", label: "Device" },
-  { href: "/demo", label: "Demo" },
 ]
 
 export function SiteNav() {
