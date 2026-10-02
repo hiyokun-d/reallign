@@ -6,14 +6,8 @@ import type {
   Device,
   PostureReading,
   PostureSession,
-  PostureStatus,
 } from "@/lib/types"
-
-export function statusFromScore(score: number): PostureStatus {
-  if (score >= 75) return "good"
-  if (score >= 50) return "warning"
-  return "bad"
-}
+import { scoreFromAngles, statusFromScore } from "@/lib/posture"
 
 // Deterministic pseudo-random so server and client render the same numbers
 // (avoids hydration mismatches you'd get with Math.random()).
@@ -40,10 +34,7 @@ export const mockReadings: PostureReading[] = Array.from(
   (_, i) => {
     const pitch = Math.round((seeded(i + 1) * 40 - 5) * 10) / 10
     const roll = Math.round((seeded(i + 100) * 16 - 8) * 10) / 10
-    const score = Math.max(
-      0,
-      Math.min(100, Math.round(100 - Math.abs(pitch) * 1.8 - Math.abs(roll) * 2))
-    )
+    const score = scoreFromAngles(pitch, roll)
     return {
       id: `r-${i}`,
       timestamp: new Date(NOW - (59 - i) * MINUTE).toISOString(),

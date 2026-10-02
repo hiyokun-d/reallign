@@ -264,6 +264,7 @@ The app is a health tool, not a game. Keep durations short (0.2–0.5s), use
 | Dashboard | `app/page.tsx` | Placeholder | Real chart (shadcn `chart`), live updating score, slouch alerts |
 | History | `app/history/page.tsx` | Placeholder | Weekly trend chart, session detail page, date filter |
 | Device | `app/device/page.tsx` | Placeholder | Pairing flow UI, connection states (connecting / failed / lost) |
+| Demo | `app/demo/` | Working | Phone = fake sensor. Open `/demo` on laptop, scan QR with phone. Uses PeerJS (WebRTC) + react-three-fiber. Both devices on the same WiFi works best |
 | Settings | (none) | Not started | Alert threshold, vibration on/off, calibration ("sit straight & tap") |
 | Onboarding | (none) | Not started | How to wear the sensor, first calibration |
 
