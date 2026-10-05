@@ -4,8 +4,9 @@
 // player leans forward and right, from the ESP32 posture sensor, a paired
 // phone, or the keyboard (in that order). The ESP32 tab manages the sensor.
 //
-// On a phone (coarse pointer) the demo is ESP32-only: the phone talks to the
-// sensor over Bluetooth itself, so there's no QR pairing or keyboard.
+// On a phone (coarse pointer) the demo is just the ESP32 screen: the phone
+// talks to the sensor over Bluetooth itself to show live data and settings.
+// No games, QR pairing or keyboard there.
 
 import { motion } from "motion/react";
 import { QRCodeSVG } from "qrcode.react";
@@ -18,12 +19,11 @@ import { LighthouseGame } from "./lighthouse-game";
 import { SteadyGame } from "./steady-game";
 import { Esp32View } from "./esp32-view";
 import { DemoButton, Panel, Pill, cx } from "./ui";
-import { NO_BLUETOOTH, useEsp32, type Esp32Sample } from "./use-esp32";
+import { useEsp32, type Esp32Sample } from "./use-esp32";
 import { usePhoneLink } from "./use-phone-link";
 
 type Mode = "race" | "steady" | "lighthouse" | "posture" | "esp32";
 const MODES: Mode[] = ["race", "steady", "lighthouse", "posture", "esp32"];
-const MOBILE_MODES: Mode[] = ["esp32", "race", "steady", "lighthouse", "posture"];
 const MODE_LABELS: Record<Mode, string> = {
   race: "Race",
   steady: "Steady",
@@ -74,14 +74,11 @@ export function DisplayView() {
   const { relative, hasData, calibrate } = link;
   const { latestRef: sensorRef, send } = ble;
   const { threshold, durationMs, alertEnabled } = ble.settings;
-  const [chosenMode, setMode] = useState<Mode | null>(null);
-  // Phones start on the ESP32 tab: nothing works until the sensor is connected.
-  const mode = chosenMode ?? (isMobile ? "esp32" : "race");
+  const [mode, setMode] = useState<Mode>("race");
   const [invert, setInvert] = useState(false);
   const connected = link.status === "connected";
   const sensorOn = ble.status === "connected";
   const input: InputSource = sensorOn ? "ESP32" : connected ? "Phone" : "Keyboard";
-  const needsSensor = isMobile && !sensorOn;
 
   // Sensor pose at the start of a run counts as "neutral" for steering.
   const sensorZero = useRef({ back: 0, backRoll: 0, neck: 0, neckRoll: 0 });
@@ -168,12 +165,24 @@ export function DisplayView() {
   const isGame = mode === "race" || mode === "steady" || mode === "lighthouse";
   const { zero, dir, rdir } = ble.settings;
 
+  if (isMobile) {
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-2xl font-semibold tracking-tight">Sensor</h1>
+          <Pill on={sensorOn}>{sensorOn ? "connected" : ble.status}</Pill>
+        </div>
+        <Esp32View ble={ble} />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-semibold tracking-tight">Lab</h1>
         <div className="flex max-w-full overflow-x-auto rounded-lg border p-0.5 max-sm:order-last max-sm:w-full">
-          {(isMobile ? MOBILE_MODES : MODES).map((m) => (
+          {MODES.map((m) => (
             <button
               key={m}
               onClick={() => setMode(m)}
@@ -189,7 +198,7 @@ export function DisplayView() {
             </button>
           ))}
         </div>
-        {mode === "esp32" || sensorOn || isMobile ? (
+        {mode === "esp32" || sensorOn ? (
           <Pill on={sensorOn}>{sensorOn ? "sensor connected" : ble.status}</Pill>
         ) : (
           <Pill on={connected}>{connected ? "phone connected" : link.status}</Pill>
@@ -198,8 +207,6 @@ export function DisplayView() {
 
       {mode === "esp32" ? (
         <Esp32View ble={ble} />
-      ) : needsSensor ? (
-        <SensorPrompt ble={ble} onOpenSetup={() => setMode("esp32")} />
       ) : (
         <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
           {/* Square on phones (portrait), fixed height on bigger screens. */}
@@ -280,28 +287,6 @@ export function DisplayView() {
         </div>
       )}
     </div>
-  );
-}
-
-/** Phone without a sensor yet: games need the ESP32. */
-function SensorPrompt({ ble, onOpenSetup }: { ble: ReturnType<typeof useEsp32>; onOpenSetup: () => void }) {
-  return (
-    <Panel className="flex flex-col items-center gap-3 py-10 text-center">
-      <p className="text-lg font-medium">Connect the posture sensor to play</p>
-      <p className="max-w-xs text-sm text-muted-foreground">
-        Wear the ESP32 and connect it over Bluetooth. Your back and neck are the controller.
-      </p>
-      {ble.supported ? (
-        <DemoButton className="h-12 px-6 text-base" onClick={ble.connect} disabled={ble.status === "connecting"}>
-          {ble.status === "connecting" ? "Connecting…" : "Connect via Bluetooth"}
-        </DemoButton>
-      ) : (
-        <p className="max-w-xs text-sm text-destructive">{NO_BLUETOOTH}</p>
-      )}
-      <button className="text-xs text-muted-foreground underline" onClick={onOpenSetup}>
-        Open sensor setup
-      </button>
-    </Panel>
   );
 }
 
