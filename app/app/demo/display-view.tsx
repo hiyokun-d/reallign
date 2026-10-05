@@ -1,7 +1,8 @@
 "use client";
 
 // Laptop side of /demo: pairs with a phone, then shows either the
-// Tilt Racer game or the posture sphere.
+// Tilt Racer game or the posture sphere. The ESP32 tab talks to the real
+// sensor over Bluetooth instead.
 
 import { motion } from "motion/react";
 import { QRCodeSVG } from "qrcode.react";
@@ -9,10 +10,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { leanAngles, scoreFromAngles, TONE_COLORS, toneFromScore } from "./math";
 import { OrientationScene } from "./orientation-scene";
 import { RaceGame, type Controls } from "./race-game";
+import { Esp32View } from "./esp32-view";
 import { DemoButton, Panel, Pill, cx } from "./ui";
+import { useEsp32 } from "./use-esp32";
 import { usePhoneLink } from "./use-phone-link";
 
-type Mode = "race" | "posture";
+type Mode = "race" | "posture" | "esp32";
+const MODE_LABELS: Record<Mode, string> = { race: "Race", posture: "Posture", esp32: "ESP32" };
 
 const FULL_TILT_DEG = 25;
 const clamp1 = (v: number) => Math.max(-1, Math.min(1, v));
@@ -20,6 +24,8 @@ const deadzone = (v: number) => (Math.abs(v) < 0.06 ? 0 : v);
 
 export function DisplayView() {
   const link = usePhoneLink();
+  // Lives here (not in Esp32View) so the BLE link survives tab switches.
+  const ble = useEsp32();
   const { relative, hasData, calibrate } = link;
   const [mode, setMode] = useState<Mode>("race");
   const [invert, setInvert] = useState(false);
@@ -59,71 +65,81 @@ export function DisplayView() {
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-semibold tracking-tight">Lab</h1>
         <div className="flex rounded-lg border p-0.5">
-          {(["race", "posture"] as const).map((m) => (
+          {(["race", "posture", "esp32"] as const).map((m) => (
             <button
               key={m}
               onClick={() => setMode(m)}
               className={cx(
-                "relative rounded-md px-3 py-1 text-sm capitalize",
+                "relative rounded-md px-3 py-1 text-sm",
                 mode === m ? "text-foreground" : "text-muted-foreground"
               )}
             >
               {mode === m && (
                 <motion.span layoutId="demo-mode" className="absolute inset-0 -z-10 rounded-md bg-muted" />
               )}
-              {m}
+              {MODE_LABELS[m]}
             </button>
           ))}
         </div>
-        <Pill on={connected}>{connected ? "phone connected" : link.status}</Pill>
+        {mode === "esp32" ? (
+          <Pill on={ble.status === "connected"}>
+            {ble.status === "connected" ? "sensor connected" : ble.status}
+          </Pill>
+        ) : (
+          <Pill on={connected}>{connected ? "phone connected" : link.status}</Pill>
+        )}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
-        <div className="h-[520px]">
-          {mode === "race" ? (
-            <RaceGame
-              getControls={getControls}
-              inputLabel={connected ? "Phone" : "Keyboard"}
-              onStart={calibrate}
-            />
-          ) : (
-            <div className="h-full rounded-xl border bg-card">
-              <OrientationSphere link={link} />
-            </div>
-          )}
-        </div>
+      {mode === "esp32" ? (
+        <Esp32View ble={ble} />
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
+          <div className="h-[520px]">
+            {mode === "race" ? (
+              <RaceGame
+                getControls={getControls}
+                inputLabel={connected ? "Phone" : "Keyboard"}
+                onStart={calibrate}
+              />
+            ) : (
+              <div className="h-full rounded-xl border bg-card">
+                <OrientationSphere link={link} />
+              </div>
+            )}
+          </div>
 
-        <div className="flex flex-col gap-4">
-          {connected ? (
-            <Panel className="flex flex-col gap-2">
-              <DemoButton variant="outline" onClick={calibrate}>
-                Calibrate (hold still, tap)
-              </DemoButton>
-              {mode === "race" && (
-                <DemoButton variant="outline" onClick={() => setInvert((v) => !v)}>
-                  Steering: {invert ? "inverted" : "normal"}
+          <div className="flex flex-col gap-4">
+            {connected ? (
+              <Panel className="flex flex-col gap-2">
+                <DemoButton variant="outline" onClick={calibrate}>
+                  Calibrate (hold still, tap)
                 </DemoButton>
-              )}
-            </Panel>
-          ) : (
-            <Panel className="flex flex-col items-center gap-3 text-center">
-              <p className="text-sm font-medium">Use your phone as the controller</p>
-              {link.joinUrl ? (
-                <div className="rounded-lg bg-white p-3">
-                  <QRCodeSVG value={link.joinUrl} size={168} />
-                </div>
-              ) : (
-                <div className="size-[192px] animate-pulse rounded-lg bg-muted" />
-              )}
-              <p className="font-mono text-2xl tracking-widest">{link.code ?? "······"}</p>
-              <p className="text-xs text-muted-foreground">Scan, or open /demo?join=CODE on the phone.</p>
-              {link.status === "error" && (
-                <p className="text-sm text-destructive">Couldn&apos;t reach the pairing server. Reload to retry.</p>
-              )}
-            </Panel>
-          )}
+                {mode === "race" && (
+                  <DemoButton variant="outline" onClick={() => setInvert((v) => !v)}>
+                    Steering: {invert ? "inverted" : "normal"}
+                  </DemoButton>
+                )}
+              </Panel>
+            ) : (
+              <Panel className="flex flex-col items-center gap-3 text-center">
+                <p className="text-sm font-medium">Use your phone as the controller</p>
+                {link.joinUrl ? (
+                  <div className="rounded-lg bg-white p-3">
+                    <QRCodeSVG value={link.joinUrl} size={168} />
+                  </div>
+                ) : (
+                  <div className="size-[192px] animate-pulse rounded-lg bg-muted" />
+                )}
+                <p className="font-mono text-2xl tracking-widest">{link.code ?? "······"}</p>
+                <p className="text-xs text-muted-foreground">Scan, or open /demo?join=CODE on the phone.</p>
+                {link.status === "error" && (
+                  <p className="text-sm text-destructive">Couldn&apos;t reach the pairing server. Reload to retry.</p>
+                )}
+              </Panel>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
