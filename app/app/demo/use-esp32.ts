@@ -12,7 +12,9 @@ import {
   NUS_SERVICE,
   NUS_TX,
   parseEsp32Line,
+  type CalEvent,
   type Esp32Settings,
+  type FwdEvent,
 } from "./protocol";
 
 // TypeScript's DOM lib has no Web Bluetooth types yet; this is the slice we use.
@@ -50,12 +52,15 @@ export type Esp32Sample = {
   back: number;
   /** Neck pitch, degrees from calibration */
   neck: number;
+  /** Side lean, + = right (0 with older firmware) */
+  backRoll: number;
+  neckRoll: number;
   motor: boolean;
 };
 
 export type LogLine = { id: number; text: string };
 
-const HISTORY_SIZE = 150; // ~30 s at the firmware's 5 Hz
+export const HISTORY_SIZE = 600; // ~30 s at the firmware's 20 Hz
 const LOG_SIZE = 60;
 
 const noopSubscribe = () => () => {};
@@ -69,7 +74,12 @@ export function useEsp32() {
   const [history, setHistory] = useState<Esp32Sample[]>([]);
   const [log, setLog] = useState<LogLine[]>([]);
   const [settings, setSettings] = useState<Esp32Settings>(ESP32_DEFAULTS);
-  const [calibrating, setCalibrating] = useState(false);
+  /** Latest calibration progress; null when none has run this session. */
+  const [cal, setCal] = useState<CalEvent | null>(null);
+  /** Latest FWD result; null until FWD is sent, "pending" while waiting. */
+  const [fwd, setFwd] = useState<FwdEvent | "pending" | null>(null);
+  /** Same for RGT. */
+  const [rgt, setRgt] = useState<FwdEvent | "pending" | null>(null);
 
   const deviceRef = useRef<BleDevice | null>(null);
   const rxRef = useRef<BleCharacteristic | null>(null);
@@ -88,20 +98,30 @@ export function useEsp32() {
     (line: string) => {
       const parsed = parseEsp32Line(line);
       if (parsed.kind === "sample") {
-        const sample = { t: performance.now(), back: parsed.back, neck: parsed.neck, motor: parsed.motor };
+        const { back, neck, backRoll, neckRoll, motor } = parsed;
+        const sample = { t: performance.now(), back, neck, backRoll, neckRoll, motor };
         latestRef.current = sample;
         setHistory((prev) => [...prev.slice(-(HISTORY_SIZE - 1)), sample]);
         return;
       }
-      // The current firmware prints this debug line every loop; keep it out of the log.
+      // Older firmware printed this debug line every loop; keep it out of the log.
       if (parsed.text === "Test 1234") return;
       if (parsed.settings) setSettings((prev) => ({ ...prev, ...parsed.settings }));
-      if (parsed.text.startsWith("Kalibrasi dalam")) {
-        latestRef.current = null; // the firmware stops streaming while it calibrates
+      if (parsed.cal) {
+        setCal(parsed.cal);
+        // The firmware stops streaming while it calibrates; don't steer on stale data.
+        if (parsed.cal.phase === "wait" || parsed.cal.phase === "hold") latestRef.current = null;
+        if (parsed.cal.phase === "ok") setHistory([]);
+        // Countdown ticks would flood the log; the UI shows them instead.
+        if (parsed.cal.phase === "wait") return;
       }
-      if (parsed.text.startsWith("Kalibrasi Selesai")) {
-        setCalibrating(false);
-        setHistory([]);
+      if (parsed.fwd) {
+        setFwd(parsed.fwd);
+        if (parsed.fwd.ok) setHistory([]);
+      }
+      if (parsed.rgt) {
+        setRgt(parsed.rgt);
+        if (parsed.rgt.ok) setHistory([]);
       }
       addLog(parsed.text);
     },
@@ -117,7 +137,9 @@ export function useEsp32() {
         .then(() => (rx.writeValueWithoutResponse ? rx.writeValueWithoutResponse(bytes) : rx.writeValue(bytes)))
         .then(() => addLog(`> ${command}`))
         .catch((err: Error) => addLog(`! ${command} failed: ${err.message}`));
-      if (command === "CAL") setCalibrating(true);
+      if (command.startsWith("CAL")) setCal({ phase: "wait", seconds: Number(command.split("=")[1] ?? 5) });
+      if (command === "FWD") setFwd("pending");
+      if (command === "RGT") setRgt("pending");
     },
     [addLog]
   );
@@ -143,7 +165,9 @@ export function useEsp32() {
       device.addEventListener("gattserverdisconnected", () => {
         rxRef.current = null;
         latestRef.current = null;
-        setCalibrating(false);
+        setCal(null);
+        setFwd(null);
+        setRgt(null);
         setStatus((s) => (s === "connected" ? "idle" : s));
         addLog("Disconnected");
       });
@@ -196,7 +220,10 @@ export function useEsp32() {
     latestRef,
     log,
     settings,
-    calibrating,
+    cal,
+    calibrating: cal?.phase === "wait" || cal?.phase === "hold",
+    fwd,
+    rgt,
     connect,
     disconnect,
     send,

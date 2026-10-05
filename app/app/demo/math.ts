@@ -47,3 +47,17 @@ export function toneFromScore(score: number): Tone {
   if (score >= 50) return "warning";
   return "bad";
 }
+
+/** Total lean (degrees) from a forward/back and a sideways angle. */
+export function tilt(pitch: number, roll: number) {
+  return Math.hypot(pitch, roll);
+}
+
+/**
+ * ESP32 pitch/roll (degrees, + = forward / right) → rotation for a 3D body
+ * whose spine is +y and whose front faces the camera (+z).
+ */
+export function tiltQuaternion(pitch: number, roll: number, out = new Quaternion()) {
+  scratch.set(MathUtils.degToRad(pitch), 0, MathUtils.degToRad(-roll), "XYZ");
+  return out.setFromEuler(scratch);
+}

@@ -10,10 +10,13 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 import type { Group, Mesh } from "three";
 import { DemoButton } from "./ui";
 
-/** Both -1..1. steer: + = right. throttle: + = faster. */
-export type Controls = { steer: number; throttle: number };
+/** Both -1..1. steer: + = right. throttle: + = faster. slouching: posture penalty. */
+export type Controls = { steer: number; throttle: number; slouching?: boolean };
 type Phase = "ready" | "playing" | "over";
-type Hud = { score: number; coins: number; speed: number };
+type Hud = { score: number; coins: number; speed: number; slouching: boolean };
+
+// Slouching past the threshold for too long chokes the engine.
+const SLOUCH_SPEED = 0.55;
 
 const ROAD_HALF = 4;
 const CAR_HALF_W = 0.55;
@@ -29,7 +32,8 @@ const BEST_KEY = "reallign-demo-best";
 type Thing = { x: number; z: number };
 
 const INPUT_HINTS: Record<string, string> = {
-  ESP32: "Sit upright and hold still when you press start. Tip your head forward/back to steer, lean your back to speed up.",
+  ESP32:
+    "Sit upright and hold still when you press start. Lean sideways to steer, lean forward to speed up. Stay inside your threshold: slouching chokes the engine.",
   Phone: "Hold your phone up, screen facing you. Tilt left/right to steer, tip forward to go faster.",
   Keyboard: "← → to steer, ↑ ↓ for speed. Connect a phone or the ESP32 to steer with your body.",
 };
@@ -89,7 +93,7 @@ function World({
     if (phase === "playing" && !s.crashed) {
       const c = controls.current();
       s.t += dt;
-      const cruise = 14 + s.t * 0.4;
+      const cruise = (14 + s.t * 0.4) * (c.slouching ? SLOUCH_SPEED : 1);
       s.speed += (cruise * (1 + 0.45 * c.throttle) - s.speed) * smooth(2, dt);
       s.targetX = c.steer * (ROAD_HALF - CAR_HALF_W);
       s.x += (s.targetX - s.x) * smooth(8, dt);
@@ -106,7 +110,7 @@ function World({
           o.x = randX(0.6);
           farthest = o.z;
         }
-        if (Math.abs(o.z) < CAR_HALF_L + 0.45 && Math.abs(o.x - s.x) < CAR_HALF_W + 0.45) {
+        if (!s.crashed && Math.abs(o.z) < CAR_HALF_L + 0.45 && Math.abs(o.x - s.x) < CAR_HALF_W + 0.45) {
           s.crashed = true;
           onCrash(Math.floor(s.dist) + s.coins * COIN_POINTS);
         }
@@ -131,6 +135,7 @@ function World({
           score: Math.floor(s.dist) + s.coins * COIN_POINTS,
           coins: s.coins,
           speed: Math.round(s.speed * 3.6),
+          slouching: !!c.slouching,
         });
       }
     } else if (phase === "ready") {
@@ -263,18 +268,21 @@ function World({
 
 export function RaceGame({
   getControls,
-  inputLabel,
+  input,
   onStart,
+  onCrash,
 }: {
   /** Called every frame while playing. */
   getControls: () => Controls;
   /** "ESP32", "Phone" or "Keyboard" — picks the hint on the title screen. */
-  inputLabel: string;
+  input: string;
   /** Called right before a run starts (used to zero the phone / sensor). */
   onStart: () => void;
+  /** Called once when the car crashes (used to buzz the sensor). */
+  onCrash?: () => void;
 }) {
   const [phase, setPhase] = useState<Phase>("ready");
-  const [hud, setHud] = useState<Hud>({ score: 0, coins: 0, speed: 0 });
+  const [hud, setHud] = useState<Hud>({ score: 0, coins: 0, speed: 0, slouching: false });
   const [best, setBest] = useState(0);
   const [lastScore, setLastScore] = useState(0);
 
@@ -295,11 +303,12 @@ export function RaceGame({
       }
     });
     onStart();
-    setHud({ score: 0, coins: 0, speed: 0 });
+    setHud({ score: 0, coins: 0, speed: 0, slouching: false });
     setPhase("playing");
   }, [onStart]);
 
   const crash = useCallback((score: number) => {
+    onCrash?.();
     setLastScore(score);
     setPhase("over");
     setBest((prev) => {
@@ -309,7 +318,7 @@ export function RaceGame({
       } catch {}
       return next;
     });
-  }, []);
+  }, [onCrash]);
 
   // Space / Enter starts or restarts.
   useEffect(() => {
@@ -338,6 +347,13 @@ export function RaceGame({
           </div>
         </div>
       )}
+      {phase === "playing" && hud.slouching && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-6 text-center">
+          <span className="animate-pulse rounded-full bg-red-600/90 px-4 py-1.5 text-sm font-bold text-white">
+            SIT UP! Engine choked
+          </span>
+        </div>
+      )}
 
       <AnimatePresence>
         {phase !== "playing" && (
@@ -360,7 +376,7 @@ export function RaceGame({
               )}
               {phase === "ready" && best > 0 && <p className="font-mono text-sm">best {best}</p>}
               <p className="max-w-xs text-sm text-white/80">
-                {INPUT_HINTS[inputLabel] ?? INPUT_HINTS.Keyboard}
+                {INPUT_HINTS[input] ?? INPUT_HINTS.Keyboard}
               </p>
               <DemoButton onClick={start} className="mt-2">
                 {phase === "ready" ? "Start" : "Again"} <span className="ml-2 opacity-60">space</span>
