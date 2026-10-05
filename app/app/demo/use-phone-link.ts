@@ -12,7 +12,8 @@ import { makeCode, PEER_PREFIX, type OrientationPacket } from "./protocol";
 
 export type LinkStatus = "starting" | "waiting" | "connected" | "error";
 
-export function usePhoneLink() {
+/** enabled = false skips the pairing server entirely (phones use the ESP32 directly). */
+export function usePhoneLink(enabled = true) {
   const [status, setStatus] = useState<LinkStatus>("starting");
   const [code, setCode] = useState<string | null>(null);
   const [joinUrl, setJoinUrl] = useState<string | null>(null);
@@ -22,6 +23,7 @@ export function usePhoneLink() {
   const relative = useRef(new Quaternion());
 
   useEffect(() => {
+    if (!enabled) return;
     let peer: Peer | null = null;
     let cancelled = false;
 
@@ -69,7 +71,7 @@ export function usePhoneLink() {
       cancelled = true;
       peer?.destroy();
     };
-  }, []);
+  }, [enabled]);
 
   /** Make the phone's current pose the new "zero". */
   const calibrate = useCallback(() => {

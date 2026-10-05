@@ -1,25 +1,36 @@
 "use client";
 
-// Laptop side of /demo. Every game reads the same "body" input: how far the
+// Main side of /demo. Every game reads the same "body" input: how far the
 // player leans forward and right, from the ESP32 posture sensor, a paired
 // phone, or the keyboard (in that order). The ESP32 tab manages the sensor.
+//
+// On a phone (coarse pointer) the demo is ESP32-only: the phone talks to the
+// sensor over Bluetooth itself, so there's no QR pairing or keyboard.
 
 import { motion } from "motion/react";
 import { QRCodeSVG } from "qrcode.react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Quaternion } from "three";
 import { leanAngles, scoreFromAngles, tilt, tiltQuaternion, TONE_COLORS, toneFromScore } from "./math";
 import { OrientationScene } from "./orientation-scene";
 import { RaceGame } from "./race-game";
+import { LighthouseGame } from "./lighthouse-game";
 import { SteadyGame } from "./steady-game";
 import { Esp32View } from "./esp32-view";
 import { DemoButton, Panel, Pill, cx } from "./ui";
-import { useEsp32, type Esp32Sample } from "./use-esp32";
+import { NO_BLUETOOTH, useEsp32, type Esp32Sample } from "./use-esp32";
 import { usePhoneLink } from "./use-phone-link";
 
-type Mode = "race" | "steady" | "posture" | "esp32";
-const MODES: Mode[] = ["race", "steady", "posture", "esp32"];
-const MODE_LABELS: Record<Mode, string> = { race: "Race", steady: "Steady", posture: "Posture", esp32: "ESP32" };
+type Mode = "race" | "steady" | "lighthouse" | "posture" | "esp32";
+const MODES: Mode[] = ["race", "steady", "lighthouse", "posture", "esp32"];
+const MOBILE_MODES: Mode[] = ["esp32", "race", "steady", "lighthouse", "posture"];
+const MODE_LABELS: Record<Mode, string> = {
+  race: "Race",
+  steady: "Steady",
+  lighthouse: "Lighthouse",
+  posture: "Posture",
+  esp32: "ESP32",
+};
 
 export type InputSource = "ESP32" | "Phone" | "Keyboard";
 
@@ -29,8 +40,12 @@ export type InputSource = "ESP32" | "Phone" | "Keyboard";
  * Values past ±1 mean the player is leaning further than is healthy.
  */
 export type Body = {
+  /** Back sensor */
   fwd: number;
   right: number;
+  /** Neck sensor (phone / keyboard: same as fwd/right) */
+  neckFwd: number;
+  neckRight: number;
   /** Tilted past the threshold for longer than the device's delay. */
   slouching: boolean;
 };
@@ -40,31 +55,46 @@ const KEYBOARD_LEAN = 0.8;
 const clamp = (v: number, max = 1.5) => Math.max(-max, Math.min(max, v));
 const deadzone = (v: number) => (Math.abs(v) < 0.06 ? 0 : v);
 
+const COARSE = "(pointer: coarse)";
+function subscribeCoarse(onChange: () => void) {
+  const mq = window.matchMedia(COARSE);
+  mq.addEventListener("change", onChange);
+  return () => mq.removeEventListener("change", onChange);
+}
+/** True on touch-first devices (phones, tablets). */
+function useIsMobile() {
+  return useSyncExternalStore(subscribeCoarse, () => window.matchMedia(COARSE).matches, () => false);
+}
+
 export function DisplayView() {
-  const link = usePhoneLink();
+  const isMobile = useIsMobile();
+  const link = usePhoneLink(!isMobile);
   // Lives here (not in Esp32View) so the BLE link survives tab switches.
   const ble = useEsp32();
   const { relative, hasData, calibrate } = link;
   const { latestRef: sensorRef, send } = ble;
   const { threshold, durationMs, alertEnabled } = ble.settings;
-  const [mode, setMode] = useState<Mode>("race");
+  const [chosenMode, setMode] = useState<Mode | null>(null);
+  // Phones start on the ESP32 tab: nothing works until the sensor is connected.
+  const mode = chosenMode ?? (isMobile ? "esp32" : "race");
   const [invert, setInvert] = useState(false);
   const connected = link.status === "connected";
   const sensorOn = ble.status === "connected";
   const input: InputSource = sensorOn ? "ESP32" : connected ? "Phone" : "Keyboard";
+  const needsSensor = isMobile && !sensorOn;
 
   // Sensor pose at the start of a run counts as "neutral" for steering.
-  const sensorZero = useRef({ back: 0, backRoll: 0 });
+  const sensorZero = useRef({ back: 0, backRoll: 0, neck: 0, neckRoll: 0 });
   // Ease between sensor samples (20/s) so motion is smooth at 60fps.
-  const smooth = useRef({ fwd: 0, right: 0, t: 0 });
+  const smooth = useRef({ fwd: 0, right: 0, neckFwd: 0, neckRight: 0, t: 0 });
   // When the current over-threshold run began (firmware rule, raw angles).
   const overSince = useRef<number | null>(null);
 
   const zeroAll = useCallback(() => {
     calibrate();
     const s = sensorRef.current;
-    if (s) sensorZero.current = { back: s.back, backRoll: s.backRoll };
-    smooth.current = { fwd: 0, right: 0, t: 0 };
+    if (s) sensorZero.current = { back: s.back, backRoll: s.backRoll, neck: s.neck, neckRoll: s.neckRoll };
+    smooth.current = { fwd: 0, right: 0, neckFwd: 0, neckRight: 0, t: 0 };
   }, [calibrate, sensorRef]);
 
   // Keyboard fallback (arrow keys / WASD).
@@ -93,28 +123,32 @@ export function DisplayView() {
   const getBody = useCallback((): Body => {
     const sample = sensorOn ? sensorRef.current : null;
     if (sample) {
-      const fwd = clamp((sample.back - sensorZero.current.back) / threshold);
-      const right = clamp((sample.backRoll - sensorZero.current.backRoll) / threshold);
+      const z = sensorZero.current;
+      const raw = {
+        fwd: clamp((sample.back - z.back) / threshold),
+        right: clamp((sample.backRoll - z.backRoll) / threshold),
+        neckFwd: clamp((sample.neck - z.neck) / threshold),
+        neckRight: clamp((sample.neckRoll - z.neckRoll) / threshold),
+      };
       const sm = smooth.current;
       const now = performance.now();
       const k = 1 - Math.exp(-Math.min(now - sm.t, 100) / 60);
       sm.t = now;
-      sm.fwd += (fwd - sm.fwd) * k;
-      sm.right += (right - sm.right) * k;
-      return { fwd: sm.fwd, right: sm.right, slouching: slouchingNow(sample) };
+      for (const key of ["fwd", "right", "neckFwd", "neckRight"] as const) sm[key] += (raw[key] - sm[key]) * k;
+      return { fwd: sm.fwd, right: sm.right, neckFwd: sm.neckFwd, neckRight: sm.neckRight, slouching: slouchingNow(sample) };
     }
     if (hasData()) {
       // Phone held upright: roll + = top tilted left; pitch + = top tilted toward you.
       const { pitch, roll } = leanAngles(relative.current);
-      return { fwd: clamp(-pitch / PHONE_FULL_TILT_DEG), right: clamp(-roll / PHONE_FULL_TILT_DEG), slouching: false };
+      const fwd = clamp(-pitch / PHONE_FULL_TILT_DEG);
+      const right = clamp(-roll / PHONE_FULL_TILT_DEG);
+      return { fwd, right, neckFwd: fwd, neckRight: right, slouching: false };
     }
     const k = keys.current;
     const pressed = (...codes: string[]) => (codes.some((c) => k.has(c)) ? KEYBOARD_LEAN : 0);
-    return {
-      fwd: pressed("ArrowUp", "KeyW") - pressed("ArrowDown", "KeyS"),
-      right: pressed("ArrowRight", "KeyD") - pressed("ArrowLeft", "KeyA"),
-      slouching: false,
-    };
+    const fwd = pressed("ArrowUp", "KeyW") - pressed("ArrowDown", "KeyS");
+    const right = pressed("ArrowRight", "KeyD") - pressed("ArrowLeft", "KeyA");
+    return { fwd, right, neckFwd: fwd, neckRight: right, slouching: false };
   }, [sensorOn, sensorRef, threshold, slouchingNow, hasData, relative]);
 
   const getRaceControls = useCallback(() => {
@@ -131,19 +165,20 @@ export function DisplayView() {
     if (sensorOn && alertEnabled) send("BUZZ");
   }, [sensorOn, alertEnabled, send]);
 
-  const isGame = mode === "race" || mode === "steady";
+  const isGame = mode === "race" || mode === "steady" || mode === "lighthouse";
+  const { zero, dir, rdir } = ble.settings;
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-semibold tracking-tight">Lab</h1>
-        <div className="flex rounded-lg border p-0.5">
-          {MODES.map((m) => (
+        <div className="flex max-w-full overflow-x-auto rounded-lg border p-0.5 max-sm:order-last max-sm:w-full">
+          {(isMobile ? MOBILE_MODES : MODES).map((m) => (
             <button
               key={m}
               onClick={() => setMode(m)}
               className={cx(
-                "relative rounded-md px-3 py-1 text-sm",
+                "relative shrink-0 whitespace-nowrap rounded-md px-3 py-1.5 text-sm",
                 mode === m ? "text-foreground" : "text-muted-foreground"
               )}
             >
@@ -154,7 +189,7 @@ export function DisplayView() {
             </button>
           ))}
         </div>
-        {mode === "esp32" || sensorOn ? (
+        {mode === "esp32" || sensorOn || isMobile ? (
           <Pill on={sensorOn}>{sensorOn ? "sensor connected" : ble.status}</Pill>
         ) : (
           <Pill on={connected}>{connected ? "phone connected" : link.status}</Pill>
@@ -163,14 +198,31 @@ export function DisplayView() {
 
       {mode === "esp32" ? (
         <Esp32View ble={ble} />
+      ) : needsSensor ? (
+        <SensorPrompt ble={ble} onOpenSetup={() => setMode("esp32")} />
       ) : (
         <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
-          <div className="h-[520px]">
+          {/* Square on phones (portrait), fixed height on bigger screens. */}
+          <div className="aspect-square max-h-[80svh] w-full sm:aspect-auto sm:h-[min(520px,85svh)]">
             {mode === "race" && (
               <RaceGame getControls={getRaceControls} input={input} onStart={zeroAll} onCrash={buzz} />
             )}
             {mode === "steady" && (
               <SteadyGame getBody={getBody} input={input} onStart={zeroAll} onFall={buzz} />
+            )}
+            {mode === "lighthouse" && (
+              <LighthouseGame
+                getBody={getBody}
+                input={input}
+                setup={
+                  sensorOn
+                    ? { calibrated: !!zero, forward: !!dir, right: !!rdir, threshold, durationMs, alertEnabled }
+                    : null
+                }
+                onStart={zeroAll}
+                onHit={buzz}
+                onOpenSetup={() => setMode("esp32")}
+              />
             )}
             {mode === "posture" && (
               <div className="h-full rounded-xl border bg-card">
@@ -191,7 +243,7 @@ export function DisplayView() {
                     slouching and costs you in-game.
                   </p>
                 )}
-                <DemoButton variant="outline" onClick={zeroAll}>
+                <DemoButton variant="outline" className="h-11 sm:h-9" onClick={zeroAll}>
                   Re-center (hold still, tap)
                 </DemoButton>
                 {mode === "race" && (
@@ -228,6 +280,28 @@ export function DisplayView() {
         </div>
       )}
     </div>
+  );
+}
+
+/** Phone without a sensor yet: games need the ESP32. */
+function SensorPrompt({ ble, onOpenSetup }: { ble: ReturnType<typeof useEsp32>; onOpenSetup: () => void }) {
+  return (
+    <Panel className="flex flex-col items-center gap-3 py-10 text-center">
+      <p className="text-lg font-medium">Connect the posture sensor to play</p>
+      <p className="max-w-xs text-sm text-muted-foreground">
+        Wear the ESP32 and connect it over Bluetooth. Your back and neck are the controller.
+      </p>
+      {ble.supported ? (
+        <DemoButton className="h-12 px-6 text-base" onClick={ble.connect} disabled={ble.status === "connecting"}>
+          {ble.status === "connecting" ? "Connecting…" : "Connect via Bluetooth"}
+        </DemoButton>
+      ) : (
+        <p className="max-w-xs text-sm text-destructive">{NO_BLUETOOTH}</p>
+      )}
+      <button className="text-xs text-muted-foreground underline" onClick={onOpenSetup}>
+        Open sensor setup
+      </button>
+    </Panel>
   );
 }
 

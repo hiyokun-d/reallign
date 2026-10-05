@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { tilt, TONE_COLORS, type Tone } from "./math";
 import { DemoButton, Panel, cx } from "./ui";
-import { HISTORY_SIZE, type Esp32Link, type Esp32Sample } from "./use-esp32";
+import { HISTORY_SIZE, NO_BLUETOOTH, type Esp32Link, type Esp32Sample } from "./use-esp32";
 
 const BACK_COLOR = "#3b82f6";
 const NECK_COLOR = "#a855f7";
@@ -37,7 +37,7 @@ export function Esp32View({ ble }: { ble: Esp32Link }) {
 
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
-      <div className="flex min-h-[520px] flex-col gap-4">
+      <div className="flex flex-col gap-4 lg:min-h-[520px]">
         {connected ? <LivePanel ble={ble} /> : <ConnectPanel ble={ble} />}
       </div>
       <div className="flex flex-col gap-4">
@@ -50,20 +50,18 @@ export function Esp32View({ ble }: { ble: Esp32Link }) {
 
 function ConnectPanel({ ble }: { ble: Esp32Link }) {
   return (
-    <Panel className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
+    <Panel className="flex flex-1 flex-col items-center justify-center gap-4 py-10 text-center">
       <p className="text-lg font-medium">Connect the posture sensor</p>
       <p className="max-w-sm text-sm text-muted-foreground">
         Power on the ESP32, then pick <span className="font-mono">PostureMonitor</span> from the browser&apos;s
         Bluetooth list. First time only: sit upright while it calibrates after boot.
       </p>
       {ble.supported ? (
-        <DemoButton className="h-11 px-6" onClick={ble.connect} disabled={ble.status === "connecting"}>
+        <DemoButton className="h-12 px-6 text-base" onClick={ble.connect} disabled={ble.status === "connecting"}>
           {ble.status === "connecting" ? "Connecting…" : "Connect via Bluetooth"}
         </DemoButton>
       ) : (
-        <p className="max-w-sm text-sm text-destructive">
-          This browser has no Web Bluetooth. Use Chrome or Edge on desktop or Android, over https or localhost.
-        </p>
+        <p className="max-w-sm text-sm text-destructive">{NO_BLUETOOTH}</p>
       )}
       {ble.error && <p className="text-sm text-destructive">{ble.error}</p>}
     </Panel>

@@ -363,10 +363,10 @@ export function RaceGame({
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 1.05 }}
             transition={{ duration: 0.25 }}
-            className="absolute inset-0 grid place-items-center bg-black/40 text-center text-white"
+            className="absolute inset-0 flex overflow-y-auto bg-black/40 p-4 text-center text-white"
           >
-            <div className="flex flex-col items-center gap-3">
-              <h2 className="text-4xl font-black italic tracking-tight">
+            <div className="m-auto flex flex-col items-center gap-3">
+              <h2 className="text-3xl font-black italic tracking-tight sm:text-4xl">
                 {phase === "ready" ? "TILT RACER" : "CRASHED!"}
               </h2>
               {phase === "over" && (
@@ -378,8 +378,8 @@ export function RaceGame({
               <p className="max-w-xs text-sm text-white/80">
                 {INPUT_HINTS[input] ?? INPUT_HINTS.Keyboard}
               </p>
-              <DemoButton onClick={start} className="mt-2">
-                {phase === "ready" ? "Start" : "Again"} <span className="ml-2 opacity-60">space</span>
+              <DemoButton onClick={start} className="mt-2 pointer-coarse:h-12 pointer-coarse:px-6 pointer-coarse:text-base">
+                {phase === "ready" ? "Start" : "Again"} <span className="ml-2 opacity-60 pointer-coarse:hidden">space</span>
               </DemoButton>
             </div>
           </motion.div>

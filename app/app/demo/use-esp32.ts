@@ -1,8 +1,8 @@
 "use client";
 
-// Laptop side of the ESP32 link: Web Bluetooth → Nordic UART Service.
-// Works in Chrome/Edge on desktop and Android (not Safari / iOS), and only on
-// https or localhost.
+// Browser side of the ESP32 link: Web Bluetooth → Nordic UART Service.
+// Works in Chrome/Edge on desktop and Android, and in the Bluefy app on iOS
+// (Safari has no Web Bluetooth). Only on https or localhost.
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
@@ -44,6 +44,9 @@ type BluetoothNavigator = Navigator & {
 };
 
 export type BleStatus = "idle" | "connecting" | "connected" | "error";
+
+export const NO_BLUETOOTH =
+  "This browser can't use Bluetooth. On a computer or Android, use Chrome or Edge. On iPhone, Safari doesn't support it: open this page in the free Bluefy browser app.";
 
 export type Esp32Sample = {
   /** performance.now() when it arrived */
@@ -209,6 +212,27 @@ export function useEsp32() {
   }, []);
 
   useEffect(() => () => deviceRef.current?.gatt?.disconnect(), []);
+
+  // Keep the screen awake while the sensor is connected (phones would
+  // otherwise sleep mid-game, and a sleeping page drops the BLE link).
+  useEffect(() => {
+    if (status !== "connected" || !("wakeLock" in navigator)) return;
+    let lock: WakeLockSentinel | null = null;
+    let cancelled = false;
+    const acquire = async () => {
+      if (document.visibilityState !== "visible") return;
+      const next = await navigator.wakeLock.request("screen").catch(() => null);
+      if (cancelled) next?.release().catch(() => {});
+      else lock = next;
+    };
+    acquire();
+    document.addEventListener("visibilitychange", acquire);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", acquire);
+      lock?.release().catch(() => {});
+    };
+  }, [status]);
 
   return {
     supported,
