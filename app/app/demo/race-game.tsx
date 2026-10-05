@@ -28,6 +28,12 @@ const BEST_KEY = "reallign-demo-best";
 
 type Thing = { x: number; z: number };
 
+const INPUT_HINTS: Record<string, string> = {
+  ESP32: "Sit upright and hold still when you press start. Tip your head forward/back to steer, lean your back to speed up.",
+  Phone: "Hold your phone up, screen facing you. Tilt left/right to steer, tip forward to go faster.",
+  Keyboard: "← → to steer, ↑ ↓ for speed. Connect a phone or the ESP32 to steer with your body.",
+};
+
 const randX = (margin: number) => (Math.random() * 2 - 1) * (ROAD_HALF - margin);
 const smooth = (rate: number, dt: number) => 1 - Math.exp(-rate * dt);
 
@@ -262,9 +268,9 @@ export function RaceGame({
 }: {
   /** Called every frame while playing. */
   getControls: () => Controls;
-  /** e.g. "Phone" or "Keyboard" — shown on the title screen. */
+  /** "ESP32", "Phone" or "Keyboard" — picks the hint on the title screen. */
   inputLabel: string;
-  /** Called right before a run starts (used to calibrate the phone). */
+  /** Called right before a run starts (used to zero the phone / sensor). */
   onStart: () => void;
 }) {
   const [phase, setPhase] = useState<Phase>("ready");
@@ -354,9 +360,7 @@ export function RaceGame({
               )}
               {phase === "ready" && best > 0 && <p className="font-mono text-sm">best {best}</p>}
               <p className="max-w-xs text-sm text-white/80">
-                {inputLabel === "Phone"
-                  ? "Hold your phone up, screen facing you. Tilt left/right to steer, tip forward to go faster."
-                  : "← → to steer, ↑ ↓ for speed. Connect a phone to steer by tilting."}
+                {INPUT_HINTS[inputLabel] ?? INPUT_HINTS.Keyboard}
               </p>
               <DemoButton onClick={start} className="mt-2">
                 {phase === "ready" ? "Start" : "Again"} <span className="ml-2 opacity-60">space</span>

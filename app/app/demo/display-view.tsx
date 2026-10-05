@@ -19,6 +19,10 @@ type Mode = "race" | "posture" | "esp32";
 const MODE_LABELS: Record<Mode, string> = { race: "Race", posture: "Posture", esp32: "ESP32" };
 
 const FULL_TILT_DEG = 25;
+// The ESP32 only measures forward/back pitch, so the neck steers and the back
+// sets speed. Smaller range than the phone: heads don't tilt that far.
+const SENSOR_STEER_DEG = 20;
+const SENSOR_THROTTLE_DEG = 20;
 const clamp1 = (v: number) => Math.max(-1, Math.min(1, v));
 const deadzone = (v: number) => (Math.abs(v) < 0.06 ? 0 : v);
 
@@ -27,9 +31,26 @@ export function DisplayView() {
   // Lives here (not in Esp32View) so the BLE link survives tab switches.
   const ble = useEsp32();
   const { relative, hasData, calibrate } = link;
+  const { latestRef: sensorRef } = ble;
   const [mode, setMode] = useState<Mode>("race");
   const [invert, setInvert] = useState(false);
+  const [invertSpeed, setInvertSpeed] = useState(false);
   const connected = link.status === "connected";
+  const sensorOn = ble.status === "connected";
+  const input = sensorOn ? "ESP32" : connected ? "Phone" : "Keyboard";
+
+  // Sensor pose at the start of a run counts as "neutral", so no CAL is needed.
+  const sensorZero = useRef({ back: 0, neck: 0 });
+  // The sensor only sends 5 samples/s; ease toward each one so the car doesn't step.
+  const sensorSmooth = useRef({ steer: 0, throttle: 0, t: 0 });
+  const zeroSensor = useCallback(() => {
+    const s = sensorRef.current;
+    if (s) sensorZero.current = { back: s.back, neck: s.neck };
+  }, [sensorRef]);
+  const zeroAll = useCallback(() => {
+    calibrate();
+    zeroSensor();
+  }, [calibrate, zeroSensor]);
 
   // Keyboard fallback (arrow keys / WASD).
   const keys = useRef(new Set<string>());
@@ -45,6 +66,20 @@ export function DisplayView() {
   }, []);
 
   const getControls = useCallback((): Controls => {
+    const sample = sensorOn ? sensorRef.current : null;
+    if (sample) {
+      const neck = sample.neck - sensorZero.current.neck;
+      const back = sample.back - sensorZero.current.back;
+      const steer = deadzone(clamp1(neck / SENSOR_STEER_DEG)) * (invert ? -1 : 1);
+      const throttle = deadzone(clamp1(back / SENSOR_THROTTLE_DEG)) * (invertSpeed ? -1 : 1);
+      const sm = sensorSmooth.current;
+      const now = performance.now();
+      const k = 1 - Math.exp(-Math.min(now - sm.t, 100) / 120);
+      sm.t = now;
+      sm.steer += (steer - sm.steer) * k;
+      sm.throttle += (throttle - sm.throttle) * k;
+      return { steer: sm.steer, throttle: sm.throttle };
+    }
     if (hasData()) {
       const { pitch, roll } = leanAngles(relative.current);
       // roll + = top of phone tilted left; pitch + = top tilted toward you.
@@ -58,7 +93,7 @@ export function DisplayView() {
       steer: (pressed("ArrowRight", "KeyD") ? 1 : 0) - (pressed("ArrowLeft", "KeyA") ? 1 : 0),
       throttle: (pressed("ArrowUp", "KeyW") ? 1 : 0) - (pressed("ArrowDown", "KeyS") ? 1 : 0),
     };
-  }, [hasData, relative, invert]);
+  }, [sensorOn, sensorRef, hasData, relative, invert, invertSpeed]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -96,11 +131,7 @@ export function DisplayView() {
         <div className="grid gap-4 lg:grid-cols-[1fr_260px]">
           <div className="h-[520px]">
             {mode === "race" ? (
-              <RaceGame
-                getControls={getControls}
-                inputLabel={connected ? "Phone" : "Keyboard"}
-                onStart={calibrate}
-              />
+              <RaceGame getControls={getControls} inputLabel={input} onStart={zeroAll} />
             ) : (
               <div className="h-full rounded-xl border bg-card">
                 <OrientationSphere link={link} />
@@ -109,14 +140,24 @@ export function DisplayView() {
           </div>
 
           <div className="flex flex-col gap-4">
-            {connected ? (
+            {connected || (sensorOn && mode === "race") ? (
               <Panel className="flex flex-col gap-2">
-                <DemoButton variant="outline" onClick={calibrate}>
+                {mode === "race" && (
+                  <p className="text-xs text-muted-foreground">
+                    Controller: <span className="font-medium text-foreground">{input}</span>
+                  </p>
+                )}
+                <DemoButton variant="outline" onClick={zeroAll}>
                   Calibrate (hold still, tap)
                 </DemoButton>
                 {mode === "race" && (
                   <DemoButton variant="outline" onClick={() => setInvert((v) => !v)}>
                     Steering: {invert ? "inverted" : "normal"}
+                  </DemoButton>
+                )}
+                {mode === "race" && sensorOn && (
+                  <DemoButton variant="outline" onClick={() => setInvertSpeed((v) => !v)}>
+                    Speed: {invertSpeed ? "inverted" : "normal"}
                   </DemoButton>
                 )}
               </Panel>
@@ -132,6 +173,15 @@ export function DisplayView() {
                 )}
                 <p className="font-mono text-2xl tracking-widest">{link.code ?? "······"}</p>
                 <p className="text-xs text-muted-foreground">Scan, or open /demo?join=CODE on the phone.</p>
+                {mode === "race" && (
+                  <p className="text-xs text-muted-foreground">
+                    Or connect the posture sensor in the{" "}
+                    <button className="underline hover:text-foreground" onClick={() => setMode("esp32")}>
+                      ESP32 tab
+                    </button>{" "}
+                    and drive with your body.
+                  </p>
+                )}
                 {link.status === "error" && (
                   <p className="text-sm text-destructive">Couldn&apos;t reach the pairing server. Reload to retry.</p>
                 )}

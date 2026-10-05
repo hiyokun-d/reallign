@@ -76,6 +76,8 @@ export function useEsp32() {
   // GATT allows one operation at a time, so writes are chained.
   const writeQueue = useRef<Promise<void>>(Promise.resolve());
   const logId = useRef(0);
+  // Same as history.at(-1), but readable every frame (the race game) without re-renders.
+  const latestRef = useRef<Esp32Sample | null>(null);
 
   const addLog = useCallback((text: string) => {
     const id = ++logId.current;
@@ -87,12 +89,16 @@ export function useEsp32() {
       const parsed = parseEsp32Line(line);
       if (parsed.kind === "sample") {
         const sample = { t: performance.now(), back: parsed.back, neck: parsed.neck, motor: parsed.motor };
+        latestRef.current = sample;
         setHistory((prev) => [...prev.slice(-(HISTORY_SIZE - 1)), sample]);
         return;
       }
       // The current firmware prints this debug line every loop; keep it out of the log.
       if (parsed.text === "Test 1234") return;
       if (parsed.settings) setSettings((prev) => ({ ...prev, ...parsed.settings }));
+      if (parsed.text.startsWith("Kalibrasi dalam")) {
+        latestRef.current = null; // the firmware stops streaming while it calibrates
+      }
       if (parsed.text.startsWith("Kalibrasi Selesai")) {
         setCalibrating(false);
         setHistory([]);
@@ -136,6 +142,7 @@ export function useEsp32() {
       deviceRef.current = device;
       device.addEventListener("gattserverdisconnected", () => {
         rxRef.current = null;
+        latestRef.current = null;
         setCalibrating(false);
         setStatus((s) => (s === "connected" ? "idle" : s));
         addLog("Disconnected");
@@ -186,6 +193,7 @@ export function useEsp32() {
     deviceName,
     history,
     latest: history.at(-1) ?? null,
+    latestRef,
     log,
     settings,
     calibrating,
